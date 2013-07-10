@@ -11,3 +11,8 @@
 *.lai
 *.la
 *.a
+
+# SQL Server Compact
+*.sdf
+*.opensdf
+
