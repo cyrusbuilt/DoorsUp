@@ -41,11 +41,11 @@
 #define DEBUG 1
 
 #ifdef DEBUG
-#define DEBUG_BAUD_RATE 9600
+    #define DEBUG_BAUD_RATE 9600
 #endif
 
-// Pin definitions. NOTE: Ethernet shield w/SD card reader attaches to pins
-// 10, 11, 12, and 13.
+// Pin definitions. NOTE: Ethernet shield w/SD card reader attaches to
+// digital pins 10, 11, 12, and 13 and analog pins 0 and 1.
 #define DOOR_CONTACT_PIN 3
 #define SD_CS_PIN 4
 #define STATUS_LED_PIN 6
@@ -99,6 +99,7 @@ const char *CONFIG_KEY_SMTPEMAILADDRESS = "SMTP_EmailAddress";
 const char *CONFIG_KEY_SMSEMAILADDRESS = "SMS_EmailAddress";
 const char *CONFIG_KEY_NOTIFYEMAIL = "NotifyEmail";
 const char *CONFIG_KEY_NOTIFYSMS = "NotifySMS";
+const char *CONFIG_KEY_ENABLEWATCHDOG = "EnableWatchDog";
 
 //*******************************************************************
 // Status reading strategy
@@ -126,6 +127,7 @@ struct Configuration
 	int smtpServerPort;
 	bool notifySmtp;
 	bool notifySms;
+    bool enableWatchdog;
 	char *smtpServerName;
 	char *smtpDestEmail;
 	char *smsDestEmail;
@@ -147,34 +149,34 @@ void printSDErrorMessage(uint8_t e, bool eol = true) {
 #if defined(DEBUG)
 	switch (e) {
 	case IniFile::errorNoError:
-		Serial.print("no error");
+        Serial.print(F("no error"));
 		break;
 	case IniFile::errorFileNotFound:
-		Serial.print("file not found.");
+        Serial.print(F("file not found."));
 		break;
 	case IniFile::errorFileNotOpen:
-		Serial.print("file not open");
+        Serial.print(F("file not open"));
 		break;
 	case IniFile::errorBufferTooSmall:
-		Serial.print("buffer too small");
+        Serial.print(F("buffer too small"));
 		break;
 	case IniFile::errorSeekError:
-		Serial.print("seek error");
+        Serial.print(F("seek error"));
 		break;
 	case IniFile::errorSectionNotFound:
-		Serial.print("section not found");
+        Serial.print(F("section not found"));
 		break;
 	case IniFile::errorKeyNotFound:
-		Serial.print("key not found");
+        Serial.print(F("key not found"));
 		break;
 	case IniFile::errorEndOfFile:
-		Serial.print("end of file");
+        Serial.print(F("end of file"));
 		break;
 	case IniFile::errorUnknownError:
-		Serial.print("unknown error");
+        Serial.print(F("unknown error"));
 		break;
 	default:
-		Serial.print("unknown error value");
+        Serial.print(F("unknown error value"));
 		break;
 	}
 
@@ -190,7 +192,7 @@ void printSDErrorMessage(uint8_t e, bool eol = true) {
  */
 void statusLedSDErrorFlash() {
 #if defined(DEBUG)
-	Serial.println("ERROR: SD.begin() failed.");
+    Serial.println(F("ERROR: SD.begin() failed."));
 #endif
 	while (1) {
 		digitalWrite(STATUS_LED_PIN, HIGH);
@@ -218,7 +220,7 @@ void statusLedNetworkWarnFlash() {
  */
 void setNetworkDefaults() {
 #if defined(DEBUG)
-	Serial.println("Falling back to default network settings...");
+    Serial.println(F("Falling back to default network settings..."));
 #endif
 	config.ip = DEFAULT_IP;
 	config.gateway = DEFAULT_GW;
@@ -226,6 +228,7 @@ void setNetworkDefaults() {
 	config.client_dns = DEFAULT_DNS;
 	config.notifySms = false;
 	config.notifySmtp = false;
+    config.enableWatchdog = false;
 	config.serverPort = DEFAULT_SERVER_PORT;
 	config.smtpServerPort = DEFAULT_SMTP_PORT;
 	config.strategy_t = CLOSED3V_OPENED5V;
@@ -239,7 +242,7 @@ void setNetworkDefaults() {
  */
 void readConfig() {
 #if defined(DEBUG)
-	Serial.print("Reading configuration...");
+    Serial.print(F("Reading configuration..."));
 #endif
 
 	// Init SD card.
@@ -261,7 +264,7 @@ void readConfig() {
 	if (!ini.validate(buffer, BUFFERLEN)) {
 #if defined(DEBUG)
 		String fname = ini.getFilename();
-		Serial.print("Config file '" + fname + "' not valid: ");
+        Serial.print(F("Config file '" + fname + "' not valid: "));
 		printSDErrorMessage(ini.getError());
 #endif
 		setNetworkDefaults();
@@ -270,7 +273,9 @@ void readConfig() {
 		return;
 	}
 
-	// Read in all the network settings.
+    // ***** Read in all the network settings *****.
+
+    // Get the local IP from config.
 	boolean fail = false;
 	IPAddress temp;
 	if (ini.getIPAddress(CONFIG_SECTION_MAIN, CONFIG_KEY_IP, buffer, BUFFERLEN, temp)) {
@@ -278,52 +283,56 @@ void readConfig() {
 	}
 	else {
 #if defined(DEBUG)
-		Serial.print("ERROR: Failed to read key: " + String(CONFIG_KEY_IP) + ". Message: ");
+        Serial.print(F("ERROR: Failed to read key: " + String(CONFIG_KEY_IP) + ". Message: "));
 		printSDErrorMessage(ini.getError());
 #endif
 		fail = true;
 	}
 
+    // Get the subnet mask from config.
 	if (ini.getIPAddress(CONFIG_SECTION_MAIN, CONFIG_KEY_SN, buffer, BUFFERLEN, temp)) {
 		config.subnetmask = temp;
 	}
 	else {
 #if defined(DEBUG)
-		Serial.print("ERROR: Failed to read key: " + String(CONFIG_KEY_SN) + ". Message: ");
+        Serial.print(F("ERROR: Failed to read key: " + String(CONFIG_KEY_SN) + ". Message: "));
 		printSDErrorMessage(ini.getError());
 #endif
 		fail = true;
 	}
 
+    // Get the gateway from config.
 	if (ini.getIPAddress(CONFIG_SECTION_MAIN, CONFIG_KEY_GW, buffer, BUFFERLEN, temp)) {
 		config.gateway = temp;
 	}
 	else {
 #if defined(DEBUG)
-		Serial.print("ERROR: Failed to ready key: " + String(CONFIG_KEY_GW) + ". Message: ");
+        Serial.print(F("ERROR: Failed to ready key: " + String(CONFIG_KEY_GW) + ". Message: "));
 		printSDErrorMessage(ini.getError());
 #endif
 		fail = true;
 	}
 
+    // Get the primary DNS address from config.
 	if (ini.getIPAddress(CONFIG_SECTION_MAIN, CONFIG_KEY_DNS, buffer, BUFFERLEN, temp)) {
 		config.client_dns = temp;
 	}
 	else {
 #if defined(DEBUG)
-		Serial.print("ERROR: Failed to read key: " + String(CONFIG_KEY_DNS) + ". Message: ");
+        Serial.print(F("ERROR: Failed to read key: " + String(CONFIG_KEY_DNS) + ". Message: "));
 		printSDErrorMessage(ini.getError());
 #endif
 		fail = true;
 	}
 
+    // Get local HTTP listener port from config.
 	int port;
 	if (ini.getValue(CONFIG_SECTION_MAIN, CONFIG_KEY_PORT, buffer, BUFFERLEN, port)) {
 		config.serverPort = port;
 	}
 	else {
 #if defined(DEBUG)
-		Serial.print("ERROR: Failed to read key: " + String(CONFIG_KEY_PORT) + ". Message: ");
+        Serial.print(F("ERROR: Failed to read key: " + String(CONFIG_KEY_PORT) + ". Message: "));
 		printSDErrorMessage(ini.getError());
 #endif
 		// On this one, we don't fail outright because the port is intially set to
@@ -332,10 +341,88 @@ void readConfig() {
 		// defaulting *all* the settings over a bad port number.
 	}
 
-	// Revert to defaults if any network settings were wrong.
-	if (fail) {
-		setNetworkDefaults();
-	}
+    // Revert to defaults if any network settings were wrong.
+    if (fail) {
+        setNetworkDefaults();
+    }
+
+    // Get enable e-mail notification flag. Default to disabled on error.
+    bool flag;
+    if (ini.getValue(CONFIG_SECTION_NOTIFY, CONFIG_KEY_NOTIFYEMAIL, buffer, BUFFERLEN, flag)) {
+        config.notifySmtp = flag;
+    }
+    else {
+#if defined(DEBUG)
+        Serial.print(F("ERROR: Failed to read key: " + String(CONFIG_KEY_NOTIFYEMAIL) + ". Message: "));
+        printSDErrorMessage(ini.getError());
+#endif
+        ini.clearError();
+        config.notifySmtp = false;
+    }
+
+    // Get enable SMS notification flag. Default to disabled on error.
+    if (ini.getValue(CONFIG_SECTION_NOTIFY, CONFIG_KEY_NOTIFYSMS, buffer, BUFFERLEN, flag)) {
+        config.notifySms = flag;
+    }
+    else {
+#if defined(DEBUG)
+        Serial.print(F("ERROR: Failed to read key: " + String(CONFIG_KEY_NOTIFYSMS) + ". Message: "));
+        printSDErrorMessage(ini.getError());
+#endif
+        ini.clearError();
+        config.notifySms = false;
+    }
+
+    // Get watchdog enabled flag. Default to disabled on error.
+    if (ini.getValue(CONFIG_SECTION_NOTIFY, CONFIG_KEY_ENABLEWATCHDOG, buffer, BUFFERLEN, flag)) {
+        config.enableWatchdog = flag;
+    }
+    else {
+        ini.clearError();
+        config.enableWatchdog = false;
+    }
+
+    // Are either notification mechanisms enabled?
+    if ((config.notifySmtp) || (config.notifySms)) {
+        // Get SMTP e-mail recipient address. Disable SMTP notifications on error.
+        if (ini.getValue(CONFIG_SECTION_NOTIFY, CONFIG_KEY_SMTPEMAILADDRESS, buffer, BUFFERLEN)) {
+            config.smtpDestEmail = buffer;
+        }
+        else {
+#if defined(DEBUG)
+            Serial.print(F("ERROR: Failed to read key: " + String(CONFIG_KEY_SMTPEMAILADDRESS) + ". Message: "));
+            printSDErrorMessage(ini.getError());
+            Serial.println(F("WARNING: Disabling SMTP notifications."));
+#endif
+            config.notifySmtp = false;
+        }
+
+        // Get SMTP host address. Disable SMTP notifications on error.
+        if (ini.getValue(CONFIG_SECTION_NOTIFY, CONFIG_KEY_SMTPSERVER, buffer, BUFFERLEN)) {
+            config.smtpServerName = buffer;
+        }
+        else {
+#if defined(DEBUG)
+            Serial.print(F("ERROR: Failed to read key" + String(CONFIG_KEY_SMTPSERVER) + ". Message: "));
+            printSDErrorMessage(ini.getError());
+            Serial.println(F("WARNING: Disabling SMTP notifications"));
+#endif
+            config.notifySmtp = false;
+        }
+
+        // Get SMTP port. Revert to default port on error.
+        if (ini.getValue(CONFIG_SECTION_NOTIFY, CONFIG_KEY_SMTPPORT, buffer, BUFFERLEN, port)) {
+            config.smtpServerPort = port;
+        }
+        else {
+#if defined(DEBUG)
+            Serial.print(F("ERROR: Failed to read key: " + String(CONFIG_KEY_SMTPPORT) + ". Message: "));
+            printSDErrorMessage(ini.getError());
+            Serial.println(F("WARNING: Falling back to default SMTP port."));
+#endif
+            config.smtpServerPort = DEFAULT_SMTP_PORT;
+        }
+    }
 
 	// Cleanup.
 	if (ini.isOpen()) {
@@ -353,6 +440,11 @@ void readConfig() {
  * @param isUrlComplete
  */
 void webRequestHandler(WebServer &server, WebServer::ConnectionType type, char *url, bool isUrlComplete) {
+    // NOTE: We currently ignore the isUrlComplete param, but it is required as
+    // part of the method signature in order to be a valid handler for
+    // webserver requests. For now, we'll just ignore the value and set it true.
+    isUrlComplete = true;
+
 #if defined(DEBUG)
 	Serial.println(F("**** Recieved HTTP request ****"));
 #endif
@@ -462,34 +554,34 @@ void webRequestHandler(WebServer &server, WebServer::ConnectionType type, char *
 	}
 
 	// Write response headers.
-	config.server.httpSuccess("text/xml; charset=utf-8");
+    server.httpSuccess("text/xml; charset=utf-8");
 #if defined(DEBUG)
 	Serial.println(F("*** XML output begin ***"));
 #endif
 
 	// Write opening element.
-	output(config.server, "<?xml version=\"1.0\"?>", true);
-	output(config.server, "<DoorsUp>", true);
+    output(server, "<?xml version=\"1.0\"?>", true);
+    output(server, "<DoorsUp>", true);
 
 	// Write door status.
-	output(config.server, "<status statusPin=\"", false);
-	output(config.server, DOOR_CONTACT_PIN, false);
-	output(config.server, "\">", false);
+    output(server, "<status statusPin=\"", false);
+    output(server, DOOR_CONTACT_PIN, false);
+    output(server, "\">", false);
 
 	// Write current open/close state.
-	output(config.server, (char*)(isOpen(DOOR_CONTACT_PIN) ? "Opened" : "Closed"), false);
-	output(config.server, "</status>", false);
+    output(server, (char*)(isOpen(DOOR_CONTACT_PIN) ? "Opened" : "Closed"), false);
+    output(server, "</status>", false);
 
 	// Re-gen new challenge token.
 	sprintf(currChallengeToken, "Cyber%i%i%i", hour(), minute(), second());
 
 	// Write challenge token.
-	output(config.server, "<challengeToken>", false);
-	output(config.server, currChallengeToken, false);
-	output(config.server, "</challengeToken>", true);
+    output(server, "<challengeToken>", false);
+    output(server, currChallengeToken, false);
+    output(server, "</challengeToken>", true);
 
 	// Write closing element.
-	output(config.server, "</DoorsUp>", true);
+    output(server, "</DoorsUp>", true);
 #if defined(DEBUG)
 	Serial.println(F("**** XML output end ****"));
 	Serial.println(F("**** END HTTP Request processing ****"));
@@ -504,19 +596,19 @@ void initNetwork() {
 	memcpy(m, MAC, sizeof(MAC));
 	Ethernet.begin(m, config.ip, config.client_dns, config.gateway, config.subnetmask);
 
-	config.server = WebServer.WebServer("", config.serverPort);
+    config.server = WebServer.WebServer("", config.serverPort);
 	config.server.setDefaultCommand(&webRequestHandler);
 	config.server.addCommand("", &webRequestHandler);
 	config.server.begin();
 
 #if defined(DEBUG)
 	Serial.println();
-	Serial.println("Network initialized as: ");
-	Serial.println("IP: " + String(Ethernet.localIP()));
-	Serial.println("Subnet: " + String(Ethernet.subnetMask()));
-	Serial.println("Gateway: " + String(Ethernet.gatewayIP()));
-	Serial.println("DNS: " + String(Ethernet.dnsServerIP()));
-	Serial.println("Listening on port: " + String(config.serverPort));
+    Serial.println(F("Network initialized as: "));
+    Serial.println(F("IP: " + String(Ethernet.localIP())));
+    Serial.println(F("Subnet: " + String(Ethernet.subnetMask())));
+    Serial.println(F("Gateway: " + String(Ethernet.gatewayIP())));
+    Serial.println(F("DNS: " + String(Ethernet.dnsServerIP())));
+    Serial.println(F("Listening on port: " + String(config.serverPort)));
 #endif
 }
 
@@ -571,7 +663,7 @@ bool isOpen(int pinNumber) {
 		status = digitalRead(pinNumber + 14); // addressing analog pins as digital pins (+14)
 	}
 
-	#if DEBUG
+    #if defined(DEBUG)
 		Serial.print(F("*** isOpen - status value for pin: '"));
 		Serial.print(pinNumber);
 		Serial.print(F("' is '"));
@@ -594,7 +686,7 @@ bool isOpen(int pinNumber) {
 	  break;
   }
 
-  #if DEBUG
+  #if defined(DEBUG)
     Serial.print(F("' returing: '"));
     Serial.print(is_open ? F("Opened") : F("Closed"));
     Serial.println(F("' ***"));
@@ -703,9 +795,13 @@ void doorOpenNotificationHandler() {
 }
 
 /**
- *
+ * Watchdog notifications handler routine. If the watchdog is enabled, then
+ * this method will send alert to the serial port (if debug enabled) and then
+ * send the alert via SMTP and/or SMS if enabled. If debug is not enabled and
+ * neither SMS or SMTP notifications are enabled, then this just keeps track
+ * of the alert flag.
  */
-void watchDogNotificationsHandler() {
+void watchDogNotificationHandler() {
 	static time_t initialOpen = NULL;
 	time_t latestOpen = NULL;
 	static boolean notificationSent = false;
@@ -749,6 +845,12 @@ void watchDogNotificationsHandler() {
 		}
 		openDetected = true;
 	}
+
+    if (!openDetected) {
+        notificationSent = false;
+        initialOpen = NULL;
+        delay(500);
+    }
 }
 
 /**
@@ -789,7 +891,7 @@ void setup() {
 	configureStatusPin(DOOR_CONTACT_PIN);
 
 	// Set arbitrary time for always-changing challenge token generation.
-	setTime(0, 0, 0, 1, 1, 2010);
+    setTime(0, 0, 0, 1, 1, 2013);
 
 	// This stuff has to happen in a specific order to work properly.
 	SPI.begin();
@@ -806,8 +908,13 @@ void loop() {
 	int len = sizeof(buffer);
 	config.server.processConnection(buffer, &len);
 
-	// TODO handle watchdog stuff here.
+    // If the watchdog is enabled, then fire the
+    if (config.enableWatchdog) {
+        watchDogNotificationHandler();
+    }
 
+    // If either SMS or SMTP (or both) notifications are enabled, then fire
+    // then fire the notification handler.
 	if ((config.notifySms) || (config.notifySmtp)) {
 		doorOpenNotificationHandler();
 	}

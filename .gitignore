@@ -1,3 +1,6 @@
+# QtCreator user settings
+*.creator.user
+
 # Compiled Object files
 *.slo
 *.lo
