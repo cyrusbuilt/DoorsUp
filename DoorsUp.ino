@@ -20,6 +20,22 @@
   You should have received a copy of the GNU General Public License
   along with this program; if not, write to the Free Software
   Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA
+
+  COMPATIBILITY NOTE:
+  This firmware was orginally written to be compatible with the Arduino Uno R3.
+  Unfortunately, the compiled sketch size (with debug code enabled) ends up
+  being ~47KB which exceeds the 32KB (minus 8KB for bootloader) that the
+  Uno R3 has. As such, this program will aparently only be be compatible with
+  the Arduino Mega 2560 and the Arduino Ethernet Shield w/SD card reader.
+
+  I supposed it is possible to strip all the HTML/XML code that the
+  web server serves up and store them as pages on the SD card that the
+  webserver then fetches and serves, but I've not yet done the work to
+  see how much space this will save, especially since some of the content
+  needs to be dynamically generated. Disabling the debug code might shrink
+  it down small enough, but then debugging is next to impossible, and since
+  this firmware is as of yet untested (I don't have the hardware yet),
+  this is not really a viable option.
 */
 
 #include <aes256.h>
@@ -97,6 +113,7 @@ const char *CONFIG_KEY_SMTPPORT = "SMTP_Port";
 const char *CONFIG_KEY_SMTPSERVER = "SMTP_Server";
 const char *CONFIG_KEY_SMTPEMAILADDRESS = "SMTP_EmailAddress";
 const char *CONFIG_KEY_SMTPSENDERADDRESS = "SMTP_SenderAddress";
+const char *CONFIG_KEY_SENDERMAILDOMAIN = "SMTP_SenderMailDomain";
 const char *CONFIG_KEY_SMSEMAILADDRESS = "SMS_EmailAddress";
 const char *CONFIG_KEY_NOTIFYEMAIL = "NotifyEmail";
 const char *CONFIG_KEY_NOTIFYSMS = "NotifySMS";
@@ -106,6 +123,9 @@ const char *CONFIG_KEY_STATUSSTRATEGY = "StatusStrategy";
 //*******************************************************************
 // Status reading strategy
 //*******************************************************************
+/**
+ * @brief The StatusStrategy enum
+ */
 enum StatusStrategy
 {
 	CLOSED3V_OPENED5V = 0, // initial approach - uses analogRead combined with STATUS_OPEN_TRESHOLD (opened == +5v, closed == +3v)
@@ -117,6 +137,9 @@ enum StatusStrategy
 //*******************************************************************
 // Configuration settings
 //*******************************************************************
+/**
+ * @brief The Configuration struct
+ */
 struct Configuration
 {
 	WebServer server;
@@ -134,6 +157,7 @@ struct Configuration
 	char *smtpDestEmail;
     char *smtpSenderServerName;
     char *smtpSenderEmail;
+    char *smtpSenderMailDomain;
 	char *smsDestEmail;
 	StatusStrategy strategy_t;
 	char *password;
@@ -143,9 +167,8 @@ struct Configuration
 Configuration config;
 
 
-
 /**
- * Prints the description of the associated error.
+ * @brief printSDErrorMessage Prints the description of the associated error.
  * @param e The error to get the description of.
  * @param eol Set true if end of line.
  */
@@ -191,13 +214,21 @@ void printSDErrorMessage(uint8_t e, bool eol = true) {
 }
 
 /**
- * Flashes the status LED once per second to indicate an SD card error occurred.
- * This method never returns as it runs in an endless loop.
+ * @brief statusLedSDErrorFlash Flashes the status LED once per second to
+ * indicate an SD card error occurred. This method never returns as it runs in
+ * an endless loop.
  */
 void statusLedSDErrorFlash() {
 #if defined(DEBUG)
-    Serial.println(F("ERROR: SD.begin() failed."));
+    Serial.println(F("ERROR: Failed to initialize SD card reader device! SD.begin() failed."));
 #endif
+    // Shut everything down.
+    SPI.end();
+    for (int i = 0; i < 18; i++) {
+        detachInterrupt(i);
+    }
+
+    // Infinite error loop flashing status LED once per second.
 	while (1) {
 		digitalWrite(STATUS_LED_PIN, HIGH);
 		delay(1000);
@@ -207,8 +238,8 @@ void statusLedSDErrorFlash() {
 }
 
 /**
- * Flash 5 times and then stop to indicate default network settings used do to
- * config read failure.
+ * @brief statusLedNetworkWarnFlash Flash 5 times and then stop to indicate
+ * default network settings used do to config read failure.
  */
 void statusLedNetworkWarnFlash() {
 	for (int i = 1; i <= 5; i++) {
@@ -220,7 +251,7 @@ void statusLedNetworkWarnFlash() {
 }
 
 /**
- * Sets the default network settings.
+ * @brief setNetworkDefaults Sets the default network settings.
  */
 void setNetworkDefaults() {
 #if defined(DEBUG)
@@ -241,8 +272,20 @@ void setNetworkDefaults() {
 }
 
 /**
- * Reads the configuration file specified by the CONFIG_FILENAME
- * consstant and loads the values into memory.
+ * @brief configKeyReadFailure Reports config file read errors.
+ * @param ini A reference to an IniFile instance that could not read the value.
+ * @param key The config section key that could not be read.
+ */
+void configKeyReadFailure(IniFile &ini, const char *key) {
+#if defined(DEBUG)
+    Serial.print("ERROR: Failed to read key: " + String(key) + ". Message: ");
+    printSDErrorMessage(ini.getError());
+#endif
+}
+
+/**
+ * @brief readConfig Reads the configuration file specified by the
+ * CONFIG_FILENAME consstant and loads the values into memory.
  */
 void readConfig() {
 #if defined(DEBUG)
@@ -267,8 +310,7 @@ void readConfig() {
 	// longer than the buffer.
 	if (!ini.validate(buffer, BUFFERLEN)) {
 #if defined(DEBUG)
-		String fname = ini.getFilename();
-        Serial.print(F("Config file '" + fname + "' not valid: "));
+        Serial.print("Config file '" + String(ini.getFilename()) + "' not valid: ");
 		printSDErrorMessage(ini.getError());
 #endif
 		setNetworkDefaults();
@@ -287,10 +329,7 @@ void readConfig() {
 		config.ip = temp;
 	}
 	else {
-#if defined(DEBUG)
-        Serial.print(F("ERROR: Failed to read key: " + String(CONFIG_KEY_IP) + ". Message: "));
-		printSDErrorMessage(ini.getError());
-#endif
+        configKeyReadFailure(ini, CONFIG_KEY_IP);
 		fail = true;
 	}
 
@@ -299,10 +338,7 @@ void readConfig() {
 		config.subnetmask = temp;
 	}
 	else {
-#if defined(DEBUG)
-        Serial.print(F("ERROR: Failed to read key: " + String(CONFIG_KEY_SN) + ". Message: "));
-		printSDErrorMessage(ini.getError());
-#endif
+        configKeyReadFailure(ini, CONFIG_KEY_SN);
 		fail = true;
 	}
 
@@ -311,10 +347,7 @@ void readConfig() {
 		config.gateway = temp;
 	}
 	else {
-#if defined(DEBUG)
-        Serial.print(F("ERROR: Failed to ready key: " + String(CONFIG_KEY_GW) + ". Message: "));
-		printSDErrorMessage(ini.getError());
-#endif
+        configKeyReadFailure(ini, CONFIG_KEY_GW);
 		fail = true;
 	}
 
@@ -323,10 +356,7 @@ void readConfig() {
 		config.client_dns = temp;
 	}
 	else {
-#if defined(DEBUG)
-        Serial.print(F("ERROR: Failed to read key: " + String(CONFIG_KEY_DNS) + ". Message: "));
-		printSDErrorMessage(ini.getError());
-#endif
+        configKeyReadFailure(ini, CONFIG_KEY_DNS);
 		fail = true;
 	}
 
@@ -336,10 +366,7 @@ void readConfig() {
 		config.serverPort = port;
 	}
 	else {
-#if defined(DEBUG)
-        Serial.print(F("ERROR: Failed to read key: " + String(CONFIG_KEY_PORT) + ". Message: "));
-		printSDErrorMessage(ini.getError());
-#endif
+        configKeyReadFailure(ini, CONFIG_KEY_PORT);
 		// On this one, we don't fail outright because the port is intially set to
 		// its default anyway. If all the other settings were successful up to this
 		// point, then we keep them and just use the default port. No sense in
@@ -371,9 +398,8 @@ void readConfig() {
         }
     }
     else {
+        configKeyReadFailure(ini, CONFIG_KEY_STATUSSTRATEGY);
 #if defined(DEBUG)
-        Serial.print(F("ERROR: Failed to read key: " + String(CONFIG_KEY_STATUSSTRATEGY) + ". Message: "));
-        printSDErrorMessage(ini.getError());
         Serial.println(F("WARNING: Defaulting to CLOSED3V_OPENED5V strategy"));
 #endif
         config.strategy_t = CLOSED3V_OPENED5V;
@@ -391,9 +417,9 @@ void readConfig() {
         config.notifySmtp = flag;
     }
     else {
+        configKeyReadFailure(ini, CONFIG_KEY_NOTIFYEMAIL);
 #if defined(DEBUG)
-        Serial.print(F("ERROR: Failed to read key: " + String(CONFIG_KEY_NOTIFYEMAIL) + ". Message: "));
-        printSDErrorMessage(ini.getError());
+        Serial.println(F("WARNING: Disabling e-mail notifications."));
 #endif
         ini.clearError();
         config.notifySmtp = false;
@@ -404,9 +430,9 @@ void readConfig() {
         config.notifySms = flag;
     }
     else {
+        configKeyReadFailure(ini, CONFIG_KEY_NOTIFYSMS);
 #if defined(DEBUG)
-        Serial.print(F("ERROR: Failed to read key: " + String(CONFIG_KEY_NOTIFYSMS) + ". Message: "));
-        printSDErrorMessage(ini.getError());
+        Serial.println(F("WARNING: Disabling SMS notifications."));
 #endif
         ini.clearError();
         config.notifySms = false;
@@ -417,6 +443,10 @@ void readConfig() {
         config.enableWatchdog = flag;
     }
     else {
+        configKeyReadFailure(ini, CONFIG_KEY_ENABLEWATCHDOG);
+#if defined(DEBUG)
+        Serial.println(F("WARNING: Disabling watchdog."));
+#endif
         ini.clearError();
         config.enableWatchdog = false;
     }
@@ -428,9 +458,8 @@ void readConfig() {
             config.smtpDestEmail = buffer;
         }
         else {
+            configKeyReadFailure(ini, CONFIG_KEY_SMTPEMAILADDRESS);
 #if defined(DEBUG)
-            Serial.print(F("ERROR: Failed to read key: " + String(CONFIG_KEY_SMTPEMAILADDRESS) + ". Message: "));
-            printSDErrorMessage(ini.getError());
             Serial.println(F("WARNING: Disabling SMTP notifications."));
 #endif
             ini.clearError();
@@ -442,9 +471,8 @@ void readConfig() {
             config.smtpServerName = buffer;
         }
         else {
+            configKeyReadFailure(ini, CONFIG_KEY_SMTPSERVER);
 #if defined(DEBUG)
-            Serial.print(F("ERROR: Failed to read key" + String(CONFIG_KEY_SMTPSERVER) + ". Message: "));
-            printSDErrorMessage(ini.getError());
             Serial.println(F("WARNING: Disabling SMTP notifications."));
 #endif
             ini.clearError();
@@ -456,9 +484,8 @@ void readConfig() {
             config.smtpServerPort = port;
         }
         else {
+            configKeyReadFailure(ini, CONFIG_KEY_SMTPPORT);
 #if defined(DEBUG)
-            Serial.print(F("ERROR: Failed to read key: " + String(CONFIG_KEY_SMTPPORT) + ". Message: "));
-            printSDErrorMessage(ini.getError());
             Serial.println(F("WARNING: Falling back to default SMTP port."));
 #endif
             ini.clearError();
@@ -470,9 +497,22 @@ void readConfig() {
             config.smtpSenderEmail = buffer;
         }
         else {
+            configKeyReadFailure(ini, CONFIG_KEY_SMTPSENDERADDRESS);
 #if defined(DEBUG)
-            Serial.print(F("ERROR: Failed to read key: " + String(CONFIG_KEY_SMTPSENDERADDRESS) + ". Message: "));
-            printSDErrorMessage(ini.getError());
+            Serial.println(F("WARNING: Disabling SMTP notifications."));
+#endif
+            config.notifySmtp = false;
+            ini.clearError();
+        }
+
+        // Get the SMTP sender mail domain. This should be the FQDN of the
+        // sender's mail server (ie. mail.mydomain.com).
+        if (ini.getValue(CONFIG_SECTION_NOTIFY, CONFIG_KEY_SENDERMAILDOMAIN, buffer, BUFFERLEN)) {
+            config.smtpSenderMailDomain = buffer;
+        }
+        else {
+            configKeyReadFailure(ini, CONFIG_KEY_SENDERMAILDOMAIN);
+#if defined(DEBUG)
             Serial.println(F("WARNING: Disabling SMTP notifications."));
 #endif
             config.notifySmtp = false;
@@ -487,9 +527,8 @@ void readConfig() {
             config.smsDestEmail = buffer;
         }
         else {
+            configKeyReadFailure(ini, CONFIG_KEY_SMSEMAILADDRESS);
 #if defined(DEBUG)
-            Serial.print(F("ERROR: Failed to read key: " + String(CONFIG_KEY_SMSEMAILADDRESS) + ". Message: "));
-            printSDErrorMessage(ini.getError());
             Serial.println(F("WARNING: Disabling SMS notifications."));
 #endif
             config.notifySms = false;
@@ -505,11 +544,16 @@ void readConfig() {
 }
 
 /**
- * Handles web requests.
- * @param server
- * @param type
- * @param url
- * @param isUrlComplete
+ * @brief webRequestHandler Handles web requests. This will attempt to decrypt
+ * the user's session password and authenticates the user if processing a door
+ * control request, then triggers the relay. If successful, or only requesting
+ * status, then the door status is output to HTTP clients.
+ * @param server A reference to the server instance that incurred the GET request.
+ * @param type The server connection type.
+ * @param url Contains the part of the URL that wasn't matched against the
+ * registered command table.
+ * @param isUrlComplete is true if the complete URL fit, or false if part of it
+ * was lost because the buffer was too small.
  */
 void webRequestHandler(WebServer &server, WebServer::ConnectionType type, char *url, bool isUrlComplete) {
     // NOTE: We currently ignore the isUrlComplete param, but it is required as
@@ -538,34 +582,29 @@ void webRequestHandler(WebServer &server, WebServer::ConnectionType type, char *
 #if defined(DEBUG)
 		Serial.println(F("*** GET request ***"));
 #endif
-	}
 
-	while ((url) && (strlen(url))) {
-		// Process each HTTP GET param one at a time.
-		memset(&name, 0, sizeof(name));
-		memset(&value, 0, sizeof(value));
-		config.server.nextURLparam(&url, name, HTTP_PARAM_NAME_SIZE, value, HTTP_PARAM_VALUE_SIZE);
+        while ((url) && (strlen(url))) {
+            // Process each HTTP GET param one at a time.
+            memset(&name, 0, sizeof(name));
+            memset(&value, 0, sizeof(value));
+            config.server.nextURLparam(&url, name, HTTP_PARAM_NAME_SIZE, value, HTTP_PARAM_VALUE_SIZE);
 
-#if defined(DEBUG)
-		Serial.print(F("PARAM - Name: '"));
-		Serial.print(name);
-		Serial.print(F("' - Value: '"));
-		Serial.print(value);
-#endif
+    #if defined(DEBUG)
+            Serial.println("*** PARAM - Name: '" + String(name) + "' - Value: '" + value + "'' ***");
+    #endif
 
-		// Keep hold of submitted encrypted hex password value.
-		if (strcmp(name, "password") == 0) {
-			strcpy(submittedPassword, value);
-		}
+            // Keep hold of submitted encrypted hex password value.
+            if (strcmp(name, "password") == 0) {
+                strcpy(submittedPassword, value);
+            }
+        }
 	}
 
 	// The presence of an HTTP GET password param results in a request
 	// to trigger the relay (used to be triggered by an HTTP request of type POST).
 	if (strlen(submittedPassword) > 0) {
 #if defined(DEBUG)
-		Serial.print(F("*** Submitted password: '"));
-		Serial.print(submittedPassword);
-		Serial.println(F("' ***"));
+        Serial.println("*** Submitted password: '" + String(submittedPassword) + "' ***");
 #endif
 
 		// Decrypt password using latest challenge token as cypher key.
@@ -606,9 +645,7 @@ void webRequestHandler(WebServer &server, WebServer::ConnectionType type, char *
 		}
 
 #if defined(DEBUG)
-		Serial.print(F("*** Decrypted password: '"));
-		Serial.print(passwordAsChar);
-		Serial.println(F("' ***"));
+        Serial.println("*** Decrypted password: '" + String(passwordAsChar) + "' ***");
 #endif
 
 		// If password matches, trigger relay.
@@ -618,11 +655,16 @@ void webRequestHandler(WebServer &server, WebServer::ConnectionType type, char *
 			Serial.println(F("Relay triggered."));
 #endif
 
-			// Trigger door relay ping and hold it HIGH for the appropriate milliseconds.
+            // Trigger door relay pin and hold it HIGH for the appropriate milliseconds.
 			digitalWrite(DOOR_RELAY_PIN, HIGH);
 			delay(RELAY_DELAY);
 			digitalWrite(DOOR_RELAY_PIN, LOW);
 		}
+        else {
+            // Not authorized to control door!!
+            server.httpUnauthorized();
+            return;
+        }
 	}
 
 	// Write response headers.
@@ -661,32 +703,51 @@ void webRequestHandler(WebServer &server, WebServer::ConnectionType type, char *
 }
 
 /**
- * Initializes the network interface.
+ * @brief webRequestFailureHandler
+ * @param server A reference to the server instance that incurred the failure.
+ * @param type The server connection type.
+ * @param url Contains the part of the URL that wasn't matched against the
+ * registered command table.
+ * @param isUrlComplete is true if the complete URL fit, or false if part of it
+ * was lost because the buffer was too small.
+ */
+void webRequestFailureHandler(WebServer &server, WebServer::ConnectionType type, char *url, bool isUrlComplete) {
+    output(server, "<html>", true);
+    output(server, "<head><title>404 - file not found</title>", true);
+    output(server, "<head>", true);
+    output(server, "<body bgcolor=#FFFFFF>", true);
+    output(server, '<p align=middle><font face="arial"><h1>404 - File not found</h1></font></p>', true);
+    output(server, "</body></html>", true);
+}
+
+/**
+ * @brief initNetwork Initializes the network interface.
  */
 void initNetwork() {
 	byte m[sizeof(MAC)];
 	memcpy(m, MAC, sizeof(MAC));
 	Ethernet.begin(m, config.ip, config.client_dns, config.gateway, config.subnetmask);
 
-    config.server = WebServer.WebServer("", config.serverPort);
+    config.server = WebServer::WebServer("", config.serverPort);
 	config.server.setDefaultCommand(&webRequestHandler);
 	config.server.addCommand("", &webRequestHandler);
+    config.server.setFailureCommand(&webRequestFailureHandler);
 	config.server.begin();
 
 #if defined(DEBUG)
 	Serial.println();
     Serial.println(F("Network initialized as: "));
-    Serial.println(F("IP: " + String(Ethernet.localIP())));
-    Serial.println(F("Subnet: " + String(Ethernet.subnetMask())));
-    Serial.println(F("Gateway: " + String(Ethernet.gatewayIP())));
-    Serial.println(F("DNS: " + String(Ethernet.dnsServerIP())));
-    Serial.println(F("Listening on port: " + String(config.serverPort)));
+    Serial.println("IP: " + String(Ethernet.localIP()));
+    Serial.println("Subnet: " + String(Ethernet.subnetMask()));
+    Serial.println("Gateway: " + String(Ethernet.gatewayIP()));
+    Serial.println("DNS: " + String(Ethernet.dnsServerIP()));
+    Serial.println("Listening on port: " + String(config.serverPort));
 #endif
 }
 
 /**
- * Prints a string to the specified webserver's output stream and (if enabled)
- * to the serial port for debug.
+ * @brief output Prints a string to the specified webserver's output stream and
+ * (if enabled) to the serial port for debug.
  * @param server The webserver to output to.
  * @param data The string data to output.
  * @param newLine Set true to termine the output with a new line.
@@ -710,8 +771,8 @@ void output(WebServer &server, char* data, bool newLine) {
 }
 
 /**
- * Prints an integer to the specified webserver's output stream and (if enabled)
- * to the serial port for debug.
+ * @brief output Prints an integer to the specified webserver's output stream
+ * and (if enabled) to the serial port for debug.
  * @param server The webserver to output to.
  * @param number The integer data to output.
  * @param newLine Set true to termine the output with a new line.
@@ -723,7 +784,7 @@ void output(WebServer &server, int number, bool newLine) {
 }
 
 /**
- * Checks the specified pin to determine whether or not the door is open.
+ * @brief isOpen Checks the specified pin to determine whether or not the door is open.
  * @param pinNumber The pin to check for status.
  */
 bool isOpen(int pinNumber) {
@@ -736,10 +797,7 @@ bool isOpen(int pinNumber) {
 	}
 
     #if defined(DEBUG)
-		Serial.print(F("*** isOpen - status value for pin: '"));
-		Serial.print(pinNumber);
-		Serial.print(F("' is '"));
-		Serial.print(status);
+        Serial.println("*** isOpen - status value for pin: '" + String(pinNumber) + "' is '" + status);
 	#endif
 
   bool is_open = false;
@@ -759,31 +817,25 @@ bool isOpen(int pinNumber) {
   }
 
   #if defined(DEBUG)
-    Serial.print(F("' returing: '"));
-    Serial.print(is_open ? F("Opened") : F("Closed"));
-    Serial.println(F("' ***"));
+    String s = is_open ? "Opened" : "Closed";
+    Serial.println("' returing: '" + s + "' ***");
   #endif
 
   return is_open;
 }
 
 /**
- * Sends a notification via e-mail.
+ * @brief notifyViaEmail Sends a notification via e-mail.
  * @param to The address to send to.
  * @param subject The message subject.
  * @param body The body of the message (content).
  */
 void notifyViaEmail(const String& to, const String& subject, const String& body) {
 #if DEBUG
-	Serial.print(F("*** SMTP - server name: '"));
-    Serial.println(config.smtpServerName);
-    Serial.print(F("to: "));
-    Serial.println(to);
-    Serial.print(F("subject: "));
-    Serial.println(subject);
-    Serial.print(F("body: "));
-    Serial.println(body);
-    Serial.println(F("***"));
+    Serial.println("*** SMTP - server name: '" + String(config.smtpServerName));
+    Serial.println("to: " + to);
+    Serial.println("subject: " + subject);
+    Serial.println("body: " + body + "***");
 #endif
 
 	if (config.smtpClient.connect(config.smtpServerName, config.smtpServerPort)) {
@@ -791,32 +843,20 @@ void notifyViaEmail(const String& to, const String& subject, const String& body)
 		Serial.println(F("**** SMTP - connection established ****"));
 #endif
 
-		config.smtpClient.println(F("HELO "));
-		config.smtpClient.print(F("relai.mydooropener.com"));
-		
-		config.smtpClient.print(F("MAIL FROM:"));
-        config.smtpClient.println(config.smtpSenderEmail);
-
-		config.smtpClient.print(F("RCPT TO:"));
-		config.smtpClient.println(to);
-
-		config.smtpClient.println(F("DATA"));
-		config.smtpClient.print(F("SUBJECT: "));
-		config.smtpClient.println(subject);
-		
+        config.smtpClient.println("HELO " + String(config.smtpSenderMailDomain));
+        config.smtpClient.println("MAIL FROM:" + String(config.smtpSenderEmail));
+        config.smtpClient.println("RCPT TO:" + to);
+        config.smtpClient.println("DATA");
+        config.smtpClient.println("SUBJECT: " + subject);
 		config.smtpClient.println();
-		config.smtpClient.print(body);
-		config.smtpClient.print(F(" "));
-		config.smtpClient.println(F("doorsup://status"));
-
-		config.smtpClient.println(F("."));
-		config.smtpClient.println(F("."));
-
-		config.smtpClient.println(F("QUIT"));
+        config.smtpClient.println(body + " " + "doorsup://status");
+        config.smtpClient.println(".");
+        config.smtpClient.println(".");
+        config.smtpClient.println("QUIT");
 		config.smtpClient.stop();
 
 #if DEBUG
-		Serial.println(F("**** SMTP - disconnected ****"));
+        Serial.println("**** SMTP - disconnected ****");
 #endif
 	}
 
@@ -826,7 +866,7 @@ void notifyViaEmail(const String& to, const String& subject, const String& body)
 }
 
 /**
- * Sends a notification via e-mail.
+ * @brief notifyViaEmail Sends a notification via e-mail.
  * @param subject The message subject.
  * @param body The body of the message (content).
  */
@@ -835,7 +875,7 @@ void notifyViaEmail(const char* subject, const char* body) {
 }
 
 /**
- * Sends a notification via SMS (text message).
+ * @brief notifyViaSms Sends a notification via SMS (text message).
  * @param subject The message subject.
  * @param body The body of the message (content).
  */
@@ -844,15 +884,14 @@ void notifyViaSms(const char* subject, const char* body) {
 }
 
 /**
- * Sends notifications of the door being open (if actually open).
+ * @brief doorOpenNotificationHandler Sends notifications of the door being
+ * open (if actually open).
  */
 void doorOpenNotificationHandler() {
 	if (isOpen(DOOR_CONTACT_PIN)) {
 #if DEBUG
-		Serial.print(F("**** Detected an open door on pin #"));
-		Serial.print(String(DOOR_CONTACT_PIN));
-		Serial.println(F(" ****"));
-		Serial.println(F("**** sending notification ****"));
+        Serial.println("**** Detected an open door on pin #" + String(DOOR_CONTACT_PIN) + " ****");
+        Serial.println("**** sending notification ****");
 #endif
 		char subject[] = "DoorsUp Notification";
 		char body[] = "The door has just been opened.";
@@ -863,15 +902,18 @@ void doorOpenNotificationHandler() {
 		if (config.notifySms) {
 			notifyViaSms(subject, body);
 		}
+
+        delete subject;
+        delete body;
 	}
 }
 
 /**
- * Watchdog notifications handler routine. If the watchdog is enabled, then
- * this method will send alert to the serial port (if debug enabled) and then
- * send the alert via SMTP and/or SMS if enabled. If debug is not enabled and
- * neither SMS or SMTP notifications are enabled, then this just keeps track
- * of the alert flag.
+ * @brief watchDogNotificationHandler Watchdog notifications handler routine.
+ * If the watchdog is enabled, then this method will send alert to the serial
+ * port (if debug enabled) and then send the alert via SMTP and/or SMS if
+ * enabled. If debug is not enabled and neither SMS or SMTP notifications are
+ * enabled, then this just keeps track of the alert flag.
  */
 void watchDogNotificationHandler() {
 	static time_t initialOpen = NULL;
@@ -887,13 +929,11 @@ void watchDogNotificationHandler() {
 		latestOpen = now();
 		if ((latestOpen - initialOpen) > (NOTIFICATIONS_WATCHDOG_MINUTES * 60)) {
 #ifdef DEBUG
-			Serial.print(F("**** Watchdog Notification Handler - Detected opened device/door @ pin #"));
-			Serial.print(DOOR_CONTACT_PIN);
-			Serial.println(F(" ****"));
+            Serial.println("**** Watchdog Notification Handler - Detected opened device/door @ pin #" + String(DOOR_CONTACT_PIN) + " ****");
 #endif
 			if (!notificationSent) {
 #ifdef DEBUG
-				Serial.println(F("**** Watchdog Notification Handler - Sending notification ****"));
+                Serial.println("**** Watchdog Notification Handler - Sending notification ****");
 #endif
 				char subject[] = "DoorsUp Notification";
 				char body[100] = "";
@@ -907,11 +947,13 @@ void watchDogNotificationHandler() {
 					notifyViaEmail(subject, body);
 				}
 
+                delete subject;
+                delete body;
 				notificationSent = true;
 			}
 			else {
 #ifdef DEBUG
-				Serial.println(F("**** Watchdog Notification Handler - NOT Sending Notification ****"));
+                Serial.println("**** Watchdog Notification Handler - NOT Sending Notification ****");
 #endif
 			}
 		}
@@ -926,8 +968,8 @@ void watchDogNotificationHandler() {
 }
 
 /**
- * Configures the specified pin to poll for status (door contact) based on
- * poll status strategy.
+ * @brief configureStatusPin Configures the specified pin to poll for status
+ * (door contact) based on poll status strategy.
  * @param pinNumber The pin to configure.
  */
 void configureStatusPin(int pinNumber) {
@@ -940,7 +982,7 @@ void configureStatusPin(int pinNumber) {
 }
 
 /**
- * Initialize host device and setup program.
+ * @brief setup Initialize host device and setup program.
  */
 void setup() {
 #ifdef DEBUG
@@ -973,7 +1015,7 @@ void setup() {
 }
 
 /**
- * Main program loop.
+ * @brief loop Main program loop.
  */
 void loop() {
 	char buffer[200];

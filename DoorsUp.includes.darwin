@@ -1,0 +1,9 @@
+./
+./lib/aes256
+./lib/IniFile
+./lib/Time
+./lib/Webduino
+/Applications/Arduino.app/Contents/Resources/Java/libraries/Ethernet
+/Applications/Arduino.app/Contents/Resources/Java/libraries/SD
+/Applications/Arduino.app/Contents/Resources/Java/libraries/SPI
+/Applications/Arduino.app/Contents/Resources/Java/hardware/arduino/cores/arduino
