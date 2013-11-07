@@ -23,9 +23,9 @@
 #define PGM_VOID_P int
 #define NOINLINE __attribute__((noinline))
 
-#define WIN64
+// #define WIN64
 // #define WIN32
-// #define DARWIN
+#define DARWIN
 // #define LINUX
 
 typedef unsigned char byte;
@@ -57,7 +57,8 @@ void configureStatusPin(int pinNumber);
 #include "C:\Program Files\Arduino\hardware\arduino\variants\standard\pins_arduino.h"
 #include "C:\Program Files\Arduino\hardware\arduino\cores\arduino\arduino.h"
 #elif defined(DARWIN)
-// TODO figure out mac paths (/Applications/Arduino.app/Contents/Resources/Java/hardware/arduino/ ..... ?
+#include "/Applications/Arduino.app/Contents/Resources/Java/hardware/arduino/variants/standard/pins_arduino.h"
+#include "/Applications/Arduino.app/Contents/Resources/Java/hardware/arduino/cores/arduino/arduino.h"
 #elif defined(LINUX)
 // TODO figure *NIX paths (?????)
 #endif

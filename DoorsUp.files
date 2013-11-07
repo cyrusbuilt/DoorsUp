@@ -6,3 +6,6 @@ lib/Time/Time.h
 lib/Webduino/WebServer.h
 DoorsUp.ino
 DoorsUp.h
+DoorsUp.includes
+lib/IniFile/IniFile.h
+lib/IniFile/IniFile.cpp

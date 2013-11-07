@@ -1,8 +1,9 @@
-D:/Dev/Arduino/DoorsUp/lib/aes256
-D:/Dev/Arduino/DoorsUp/lib/Time
-D:/Dev/Arduino/DoorsUp/lib/Webduino
-C:\Program Files (x86)\Arduino\libraries\Ethernet
-C:\Program Files (x86)\Arduino\libraries\IniFile
-C:\Program Files (x86)\Arduino\libraries\SD
-C:\Program Files (x86)\Arduino\libraries\SPI
-C:\Program Files (x86)\Arduino\hardware\arduino\cores\arduino
+./
+./lib/aes256
+./lib/IniFile
+./lib/Time
+./lib/Webduino
+/Applications/Arduino.app/Contents/Resources/Java/libraries/Ethernet
+/Applications/Arduino.app/Contents/Resources/Java/libraries/SD
+/Applications/Arduino.app/Contents/Resources/Java/libraries/SPI
+/Applications/Arduino.app/Contents/Resources/Java/hardware/arduino/cores/arduino

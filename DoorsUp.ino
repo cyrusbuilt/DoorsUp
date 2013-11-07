@@ -96,10 +96,12 @@ const char *CONFIG_KEY_PORT = "Port";
 const char *CONFIG_KEY_SMTPPORT = "SMTP_Port";
 const char *CONFIG_KEY_SMTPSERVER = "SMTP_Server";
 const char *CONFIG_KEY_SMTPEMAILADDRESS = "SMTP_EmailAddress";
+const char *CONFIG_KEY_SMTPSENDERADDRESS = "SMTP_SenderAddress";
 const char *CONFIG_KEY_SMSEMAILADDRESS = "SMS_EmailAddress";
 const char *CONFIG_KEY_NOTIFYEMAIL = "NotifyEmail";
 const char *CONFIG_KEY_NOTIFYSMS = "NotifySMS";
 const char *CONFIG_KEY_ENABLEWATCHDOG = "EnableWatchDog";
+const char *CONFIG_KEY_STATUSSTRATEGY = "StatusStrategy";
 
 //*******************************************************************
 // Status reading strategy
@@ -130,6 +132,8 @@ struct Configuration
     bool enableWatchdog;
 	char *smtpServerName;
 	char *smtpDestEmail;
+    char *smtpSenderServerName;
+    char *smtpSenderEmail;
 	char *smsDestEmail;
 	StatusStrategy strategy_t;
 	char *password;
@@ -270,6 +274,7 @@ void readConfig() {
 		setNetworkDefaults();
 		ini.clearError();
 		ini.close();
+        ini.~IniFile();
 		return;
 	}
 
@@ -341,6 +346,40 @@ void readConfig() {
 		// defaulting *all* the settings over a bad port number.
 	}
 
+    // Get poll status strategy. Default to closed 3V/opened 5V strategy on error.
+    int strategy;
+    if (ini.getValue(CONFIG_SECTION_MAIN, CONFIG_KEY_STATUSSTRATEGY, buffer, BUFFERLEN, strategy)) {
+        switch (strategy) {
+            case 0:
+                config.strategy_t = CLOSED3V_OPENED5V;
+                break;
+            case 1:
+                config.strategy_t = CLOSED5V_OPENED3V;
+                break;
+            case 2:
+                config.strategy_t = NORMALLY_CLOSED;
+                break;
+            case 3:
+                config.strategy_t = NORMALLY_OPENED;
+                break;
+            default:
+#if defined(DEBUG)
+                Serial.println(F("WARNING: Invalid status strategy type. Defaulting to CLOSED3V_OPENED5V."));
+#endif
+                config.strategy_t = CLOSED3V_OPENED5V;
+                break;
+        }
+    }
+    else {
+#if defined(DEBUG)
+        Serial.print(F("ERROR: Failed to read key: " + String(CONFIG_KEY_STATUSSTRATEGY) + ". Message: "));
+        printSDErrorMessage(ini.getError());
+        Serial.println(F("WARNING: Defaulting to CLOSED3V_OPENED5V strategy"));
+#endif
+        config.strategy_t = CLOSED3V_OPENED5V;
+        ini.clearError();
+    }
+
     // Revert to defaults if any network settings were wrong.
     if (fail) {
         setNetworkDefaults();
@@ -394,6 +433,7 @@ void readConfig() {
             printSDErrorMessage(ini.getError());
             Serial.println(F("WARNING: Disabling SMTP notifications."));
 #endif
+            ini.clearError();
             config.notifySmtp = false;
         }
 
@@ -405,8 +445,9 @@ void readConfig() {
 #if defined(DEBUG)
             Serial.print(F("ERROR: Failed to read key" + String(CONFIG_KEY_SMTPSERVER) + ". Message: "));
             printSDErrorMessage(ini.getError());
-            Serial.println(F("WARNING: Disabling SMTP notifications"));
+            Serial.println(F("WARNING: Disabling SMTP notifications."));
 #endif
+            ini.clearError();
             config.notifySmtp = false;
         }
 
@@ -420,7 +461,38 @@ void readConfig() {
             printSDErrorMessage(ini.getError());
             Serial.println(F("WARNING: Falling back to default SMTP port."));
 #endif
+            ini.clearError();
             config.smtpServerPort = DEFAULT_SMTP_PORT;
+        }
+
+        // Get SMTP sender address.
+        if (ini.getValue(CONFIG_SECTION_NOTIFY, CONFIG_KEY_SMTPSENDERADDRESS, buffer, BUFFERLEN)) {
+            config.smtpSenderEmail = buffer;
+        }
+        else {
+#if defined(DEBUG)
+            Serial.print(F("ERROR: Failed to read key: " + String(CONFIG_KEY_SMTPSENDERADDRESS) + ". Message: "));
+            printSDErrorMessage(ini.getError());
+            Serial.println(F("WARNING: Disabling SMTP notifications."));
+#endif
+            config.notifySmtp = false;
+            ini.clearError();
+        }
+    }
+
+    // Are SMS notifications enabled?
+    if (config.notifySms) {
+        // Get SMS destination address. Disable SMS on error.
+        if (ini.getValue(CONFIG_SECTION_NOTIFY, CONFIG_KEY_SMSEMAILADDRESS, buffer, BUFFERLEN)) {
+            config.smsDestEmail = buffer;
+        }
+        else {
+#if defined(DEBUG)
+            Serial.print(F("ERROR: Failed to read key: " + String(CONFIG_KEY_SMSEMAILADDRESS) + ". Message: "));
+            printSDErrorMessage(ini.getError());
+            Serial.println(F("WARNING: Disabling SMS notifications."));
+#endif
+            config.notifySms = false;
         }
     }
 
@@ -433,7 +505,7 @@ void readConfig() {
 }
 
 /**
- *
+ * Handles web requests.
  * @param server
  * @param type
  * @param url
@@ -723,7 +795,7 @@ void notifyViaEmail(const String& to, const String& subject, const String& body)
 		config.smtpClient.print(F("relai.mydooropener.com"));
 		
 		config.smtpClient.print(F("MAIL FROM:"));
-		config.smtpClient.println(F("noreply@mydooropener.com"));
+        config.smtpClient.println(config.smtpSenderEmail);
 
 		config.smtpClient.print(F("RCPT TO:"));
 		config.smtpClient.println(to);
